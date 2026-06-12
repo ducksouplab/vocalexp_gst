@@ -79,12 +79,16 @@ void PhaseVocoder::reset() {
 
 float PhaseVocoder::processSample(float input) {
   inputFifo_[fifoPosition_] = input;
-  const float output = outputFifo_[fifoPosition_ - latencySamples()];
-  ++fifoPosition_;
+  const float output = outputFifo_[0];
 
+  // Advance output FIFO
+  std::memmove(outputFifo_.data(), outputFifo_.data() + 1, (outputFifo_.size() - 1) * sizeof(float));
+  outputFifo_.back() = 0.0f;
+
+  ++fifoPosition_;
   if (fifoPosition_ >= config_.frameSize) {
-    fifoPosition_ = latencySamples();
     processFrame();
+    fifoPosition_ = config_.frameSize - hopSize_;
   }
   return output;
 }
@@ -126,10 +130,25 @@ void PhaseVocoder::processFrame() {
   std::fill(synthesisMagnitude_.begin(), synthesisMagnitude_.end(), 0.0f);
   std::fill(synthesisFrequency_.begin(), synthesisFrequency_.end(), 0.0f);
   for (std::size_t k = 0; k < numBins_; ++k) {
-    const std::size_t target = static_cast<std::size_t>(static_cast<float>(k) * ratio + 0.5f);
-    if (target >= numBins_) break;
-    synthesisMagnitude_[target] += analysisMagnitude_[k];
-    synthesisFrequency_[target] = analysisFrequency_[k] * ratio;
+    const float targetFloat = static_cast<float>(k) * ratio;
+    const std::size_t lower = static_cast<std::size_t>(targetFloat);
+    const std::size_t upper = lower + 1;
+    const float weight = targetFloat - static_cast<float>(lower);
+
+    if (lower < numBins_) {
+      synthesisMagnitude_[lower] += analysisMagnitude_[k] * (1.0f - weight);
+      // For frequencies, we just take the last one or strongest. 
+      // Simple heuristic: if this is the first or strongest contribution, set it.
+      if (synthesisFrequency_[lower] == 0.0f || (analysisMagnitude_[k] * (1.0f - weight) > synthesisMagnitude_[lower] * 0.5f)) {
+        synthesisFrequency_[lower] = analysisFrequency_[k] * ratio;
+      }
+    }
+    if (upper < numBins_) {
+      synthesisMagnitude_[upper] += analysisMagnitude_[k] * weight;
+      if (synthesisFrequency_[upper] == 0.0f || (analysisMagnitude_[k] * weight > synthesisMagnitude_[upper] * 0.5f)) {
+        synthesisFrequency_[upper] = analysisFrequency_[k] * ratio;
+      }
+    }
   }
 
   // --- Re-apply the original envelope at the original frequencies ---
@@ -146,7 +165,14 @@ void PhaseVocoder::processFrame() {
         kTwoPi * static_cast<float>(hopSize_) *
         (static_cast<float>(k) / static_cast<float>(n) + frequencyOffset / config_.sampleRate);
     accumulatedPhase_[k] = principalArgument(accumulatedPhase_[k] + phaseAdvance);
-    spectrum_[k] = std::polar(synthesisMagnitude_[k], accumulatedPhase_[k]);
+    
+    // Force DC and Nyquist to be real (phase 0 or PI) to avoid complex leakage
+    float phase = accumulatedPhase_[k];
+    if (k == 0 || k == n / 2) {
+      phase = (std::cos(phase) >= 0) ? 0.0f : static_cast<float>(M_PI);
+    }
+    
+    spectrum_[k] = std::polar(synthesisMagnitude_[k], phase);
   }
   // Restore conjugate symmetry for a real output signal.
   for (std::size_t k = numBins_; k < n; ++k) {
@@ -161,9 +187,11 @@ void PhaseVocoder::processFrame() {
     outputAccumulator_[k] += spectrum_[k].real() * window_[k] * gain;
   }
 
-  // The first hop of the accumulator is complete: emit it and slide.
-  std::copy(outputAccumulator_.begin(), outputAccumulator_.begin() + hopSize_,
-            outputFifo_.begin());
+  // The first hop of the accumulator is complete: add it to output FIFO and slide.
+  for (std::size_t i = 0; i < hopSize_; ++i) {
+    outputFifo_[i] += outputAccumulator_[i];
+  }
+  
   std::memmove(outputAccumulator_.data(), outputAccumulator_.data() + hopSize_,
                (n - hopSize_) * sizeof(float));
   std::fill(outputAccumulator_.end() - hopSize_, outputAccumulator_.end(), 0.0f);

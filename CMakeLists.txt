@@ -16,9 +16,37 @@ endif()
 add_compile_options(-Wall -Wextra -Wpedantic)
 
 # ---------------------------------------------------------------------------
-# Core DSP library (no GStreamer dependency — wrapped by the plugin in Phase 2)
+# Dependencies
 # ---------------------------------------------------------------------------
-add_library(vocalexp_dsp STATIC
+find_package(PkgConfig REQUIRED)
+
+# GStreamer
+pkg_check_modules(GST IMPORTED_TARGET
+  gstreamer-1.0>=1.20
+  gstreamer-base-1.0
+  gstreamer-audio-1.0
+)
+
+# RubberBand
+pkg_check_modules(RUBBERBAND IMPORTED_TARGET rubberband)
+if(RUBBERBAND_FOUND)
+  add_definitions(-DHAVE_RUBBERBAND)
+  message(STATUS "Found RubberBand: ${RUBBERBAND_VERSION}")
+endif()
+
+# ONNX Runtime (for swift-f0)
+find_path(ONNXRUNTIME_INCLUDE_DIR NAMES onnxruntime_c_api.h)
+find_library(ONNXRUNTIME_LIBRARY NAMES onnxruntime)
+if(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY)
+  set(ONNXRUNTIME_FOUND TRUE)
+  add_definitions(-DHAVE_ONNXRUNTIME)
+  message(STATUS "Found ONNX Runtime")
+endif()
+
+# ---------------------------------------------------------------------------
+# Core DSP library
+# ---------------------------------------------------------------------------
+set(DSP_SOURCES
   src/dsp/fft.cpp
   src/dsp/phase_vocoder.cpp
   src/dsp/envelope_extractor.cpp
@@ -26,8 +54,28 @@ add_library(vocalexp_dsp STATIC
   src/dsp/expressivity_mapper.cpp
   src/dsp/vocal_expressivity_processor.cpp
 )
+
+if(ONNXRUNTIME_FOUND)
+  list(APPEND DSP_SOURCES src/dsp/swift_pitch_tracker.cpp)
+endif()
+
+if(RUBBERBAND_FOUND)
+  list(APPEND DSP_SOURCES src/dsp/rubberband_stretcher.cpp)
+endif()
+
+add_library(vocalexp_dsp STATIC ${DSP_SOURCES})
 target_include_directories(vocalexp_dsp PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+if(ONNXRUNTIME_FOUND)
+  target_include_directories(vocalexp_dsp PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
+endif()
 set_target_properties(vocalexp_dsp PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+if(RUBBERBAND_FOUND)
+  target_link_libraries(vocalexp_dsp PRIVATE PkgConfig::RUBBERBAND)
+endif()
+if(ONNXRUNTIME_FOUND)
+  target_link_libraries(vocalexp_dsp PRIVATE ${ONNXRUNTIME_LIBRARY})
+endif()
 
 # ---------------------------------------------------------------------------
 # GStreamer plugin
@@ -35,13 +83,6 @@ set_target_properties(vocalexp_dsp PROPERTIES POSITION_INDEPENDENT_CODE ON)
 option(VOCALEXP_BUILD_PLUGIN "Build the GStreamer plugin" ON)
 
 if(VOCALEXP_BUILD_PLUGIN)
-  find_package(PkgConfig REQUIRED)
-  pkg_check_modules(GST IMPORTED_TARGET
-    gstreamer-1.0>=1.20
-    gstreamer-base-1.0
-    gstreamer-audio-1.0
-  )
-
   if(GST_FOUND)
     add_library(gstvocalexp MODULE src/gst/gstvocalexp.cpp)
     target_link_libraries(gstvocalexp PRIVATE vocalexp_dsp PkgConfig::GST)

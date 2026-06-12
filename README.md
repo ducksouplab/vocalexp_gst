@@ -17,7 +17,23 @@ monotone (`expressivity < 1`) or exaggerating its intonation
 | 2 | GStreamer `GstAudioFilter` element (`expressivity`, `envelope-preservation` properties) + harness tests | ✅ done |
 | 3 | Live pipelines (`autoaudiosrc` → plugin → `autoaudiosink`) + interactive demo tool | ✅ done |
 
-## Quick start
+## Quick start (Docker)
+
+The project includes a `Dockerfile` that packages all dependencies (GStreamer, ONNX Runtime, RubberBand) and builds the plugin.
+
+```sh
+docker build -t vocalexp-gst .
+
+# Process a file:
+docker run --rm -v $(pwd):/workspace vocalexp-gst \
+  gst-launch-1.0 filesrc location=media/in/F21a1.wav ! wavparse ! \
+  audioconvert ! audioresample ! \
+  'audio/x-raw,format=F32LE,channels=1,rate=48000' ! \
+  vocalexp expressivity=2.0 ! \
+  audioconvert ! wavenc ! filesink location=media/out/F21a1_expressive.wav
+```
+
+## Quick start (Local)
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -30,7 +46,7 @@ gst-inspect-1.0 vocalexp
 ```
 
 Prefer notebooks? [`notebooks/vocalexp_tutorial.ipynb`](notebooks/vocalexp_tutorial.ipynb)
-builds the plugin, processes a WAV of your choice (or a generated demo voice),
+builds the plugin, processes a WAV from `media/in/`,
 lets you A/B the audio, and plots pitch contours and spectrograms for any
 parameter combination (needs `numpy` + `matplotlib`).
 

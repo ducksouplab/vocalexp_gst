@@ -32,15 +32,16 @@ void PitchTracker::push(const float* samples, std::size_t n) {
   for (std::size_t i = 0; i < n; ++i) {
     history_[writePosition_] = samples[i];
     writePosition_ = (writePosition_ + 1) % history_.size();
+    if (samplesSeen_ < history_.size()) samplesSeen_++;
   }
-  samplesSeen_ = std::min(samplesSeen_ + n, history_.size());
 }
 
 PitchEstimate PitchTracker::estimate() {
   PitchEstimate result;
-  if (samplesSeen_ < history_.size()) return result;  // not enough history yet
+  if (samplesSeen_ < history_.size()) return result;  // Wait for buffer to fill
 
-  // Linearise the ring buffer, oldest sample first.
+  // Linearise the ring buffer into frame_ for easier indexing.
+  // frame_[0] is the oldest sample.
   const std::size_t size = history_.size();
   for (std::size_t i = 0; i < size; ++i) {
     frame_[i] = history_[(writePosition_ + i) % size];

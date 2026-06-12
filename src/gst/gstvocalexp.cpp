@@ -30,11 +30,14 @@ constexpr guint kDefaultFrameSize = 1024;
 constexpr guint kDefaultOverlapFactor = 4;
 constexpr float kDefaultMinFrequency = 60.0f;
 constexpr float kDefaultMaxFrequency = 1000.0f;
+constexpr vocalexp::VocalExpressivityProcessor::Engine kDefaultEngine =
+    vocalexp::VocalExpressivityProcessor::Engine::LEGACY;
 
 enum {
   PROP_0,
   PROP_EXPRESSIVITY,
   PROP_ENVELOPE_PRESERVATION,
+  PROP_ENGINE,
   PROP_FRAME_SIZE,
   PROP_OVERLAP_FACTOR,
   PROP_MIN_FREQUENCY,
@@ -63,6 +66,7 @@ struct _GstVocalexp {
 
   gfloat expressivity;
   gboolean envelopePreservation;
+  vocalexp::VocalExpressivityProcessor::Engine engine;
   guint frameSize;
   guint overlapFactor;
   gfloat minFrequency;
@@ -72,6 +76,23 @@ struct _GstVocalexp {
 G_DEFINE_TYPE_WITH_CODE(GstVocalexp, gst_vocalexp, GST_TYPE_AUDIO_FILTER,
                         GST_DEBUG_CATEGORY_INIT(gst_vocalexp_debug, "vocalexp", 0,
                                                 "vocal expressivity filter"));
+
+#define GST_TYPE_VOCALEXP_ENGINE (gst_vocalexp_engine_get_type())
+static GType
+gst_vocalexp_engine_get_type (void)
+{
+  static GType engine_type = 0;
+  static const GEnumValue engine_values[] = {
+    {static_cast<gint>(vocalexp::VocalExpressivityProcessor::Engine::LEGACY), "LEGACY (YIN + Phase Vocoder)", "legacy"},
+    {static_cast<gint>(vocalexp::VocalExpressivityProcessor::Engine::MODERN), "MODERN (SWIFT-F0 + RubberBand)", "modern"},
+    {0, NULL, NULL}
+  };
+
+  if (!engine_type) {
+    engine_type = g_enum_register_static("GstVocalexpEngine", engine_values);
+  }
+  return engine_type;
+}
 
 static void gst_vocalexp_set_property(GObject* object, guint propertyId,
                                       const GValue* value, GParamSpec* pspec) {
@@ -88,6 +109,9 @@ static void gst_vocalexp_set_property(GObject* object, guint propertyId,
       if (*self->processor) {
         (*self->processor)->setEnvelopePreservation(self->envelopePreservation != FALSE);
       }
+      break;
+    case PROP_ENGINE:
+      self->engine = static_cast<vocalexp::VocalExpressivityProcessor::Engine>(g_value_get_enum(value));
       break;
     case PROP_FRAME_SIZE:
       self->frameSize = g_value_get_uint(value);
@@ -118,6 +142,9 @@ static void gst_vocalexp_get_property(GObject* object, guint propertyId, GValue*
       break;
     case PROP_ENVELOPE_PRESERVATION:
       g_value_set_boolean(value, self->envelopePreservation);
+      break;
+    case PROP_ENGINE:
+      g_value_set_enum(value, static_cast<gint>(self->engine));
       break;
     case PROP_FRAME_SIZE:
       g_value_set_uint(value, self->frameSize);
@@ -151,18 +178,18 @@ static gboolean gst_vocalexp_setup(GstAudioFilter* filter, const GstAudioInfo* i
 
   vocalexp::VocalExpressivityProcessor::Config config;
   config.sampleRate = static_cast<float>(GST_AUDIO_INFO_RATE(info));
-  config.frameSize = self->frameSize;
-  config.overlapFactor = self->overlapFactor;
+  config.engine = self->engine;
   config.expressivity = self->expressivity;
   config.envelopePreservation = self->envelopePreservation != FALSE;
+  config.frameSize = self->frameSize;
+  config.overlapFactor = self->overlapFactor;
   config.minFrequency = self->minFrequency;
   config.maxFrequency = self->maxFrequency;
 
   try {
-    *self->processor = std::make_unique<vocalexp::VocalExpressivityProcessor>(config);
-  } catch (const std::exception& error) {
-    GST_ELEMENT_ERROR(self, LIBRARY, SETTINGS, (nullptr),
-                      ("invalid DSP configuration: %s", error.what()));
+    self->processor->reset(new vocalexp::VocalExpressivityProcessor(config));
+  } catch (const std::exception& e) {
+    GST_ELEMENT_ERROR(self, LIBRARY, SETTINGS, (nullptr), ("%s", e.what()));
     return FALSE;
   }
 
@@ -286,6 +313,14 @@ static void gst_vocalexp_class_init(GstVocalexpClass* klass) {
                                    GST_PARAM_CONTROLLABLE)));
 
   g_object_class_install_property(
+      gobjectClass, PROP_ENGINE,
+      g_param_spec_enum("engine", "Engine",
+                        "Processing engine: LEGACY (YIN + Phase Vocoder) or "
+                        "MODERN (SWIFT-F0 + RubberBand)",
+                        GST_TYPE_VOCALEXP_ENGINE, static_cast<gint>(kDefaultEngine),
+                        static_cast<GParamFlags>(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
+  g_object_class_install_property(
       gobjectClass, PROP_FRAME_SIZE,
       g_param_spec_uint(
           "frame-size", "STFT frame size",
@@ -344,6 +379,7 @@ static void gst_vocalexp_init(GstVocalexp* self) {
   self->processor = new std::unique_ptr<vocalexp::VocalExpressivityProcessor>();
   self->expressivity = kDefaultExpressivity;
   self->envelopePreservation = kDefaultEnvelopePreservation;
+  self->engine = kDefaultEngine;
   self->frameSize = kDefaultFrameSize;
   self->overlapFactor = kDefaultOverlapFactor;
   self->minFrequency = kDefaultMinFrequency;

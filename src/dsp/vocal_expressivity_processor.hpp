@@ -1,64 +1,94 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
+#include <vector>
 
 #include "dsp/expressivity_mapper.hpp"
 #include "dsp/phase_vocoder.hpp"
 #include "dsp/pitch_tracker.hpp"
 
+#ifdef HAVE_ONNXRUNTIME
+#include "dsp/swift_pitch_tracker.hpp"
+#endif
+
+#ifdef HAVE_RUBBERBAND
+#include "dsp/rubberband_stretcher.hpp"
+#endif
+
 namespace vocalexp {
 
-/// Full mono processing chain: YIN pitch tracking → expressivity mapping →
-/// phase-vocoder pitch shifting (with optional spectral-envelope
-/// preservation).
-///
-/// This is the object the GStreamer element wraps in Phase 2: process() is
-/// real-time safe (no allocation), produces one output sample per input
-/// sample, and all parameters can be changed concurrently-safely between
-/// process() calls. Algorithmic latency is latencySamples().
+/**
+ * @brief Full mono processing chain.
+ * 
+ * Supports two processing engines:
+ * - LEGACY: Custom YIN + Phase Vocoder (default)
+ * - MODERN: SWIFT-F0 (ONNX) + Rubber Band Stretcher
+ */
 class VocalExpressivityProcessor {
  public:
+  enum class Engine {
+    LEGACY,
+    MODERN
+  };
+
   struct Config {
     float sampleRate = 48000.0f;
-    std::size_t frameSize = 1024;    ///< STFT window (power of two).
-    std::size_t overlapFactor = 4;   ///< hop = frameSize / overlapFactor.
+    Engine engine = Engine::LEGACY;
+    
     float expressivity = 1.0f;
     bool envelopePreservation = true;
-    std::size_t envelopeOrder = 40;
-    float minFrequency = 60.0f;      ///< Pitch search range.
+
+    // Legacy (YIN/Vocoder) parameters
+    std::size_t frameSize = 1024;
+    std::size_t overlapFactor = 4;
+    float minFrequency = 60.0f;
     float maxFrequency = 1000.0f;
+    std::size_t envelopeOrder = 40;
   };
 
   explicit VocalExpressivityProcessor(const Config& config);
+  ~VocalExpressivityProcessor();
 
-  void setExpressivity(float e) { mapper_.setExpressivity(e); }
+  void setExpressivity(float e);
   float expressivity() const { return mapper_.expressivity(); }
 
-  void setEnvelopePreservation(bool enabled) { vocoder_.setEnvelopePreservation(enabled); }
-  bool envelopePreservation() const { return vocoder_.envelopePreservation(); }
+  void setEnvelopePreservation(bool enabled);
+  bool envelopePreservation() const;
 
-  std::size_t latencySamples() const { return vocoder_.latencySamples(); }
-  std::size_t hopSize() const { return vocoder_.hopSize(); }
+  std::size_t latencySamples() const;
+  std::size_t hopSize() const;
 
-  /// Pitch ratio applied to the most recent analysis frame (diagnostic).
-  float currentPitchRatio() const { return vocoder_.pitchRatio(); }
-  /// Most recent tracked f0 in Hz, 0 if unvoiced (diagnostic).
+  float currentPitchRatio() const;
   float currentF0() const { return currentF0_; }
 
-  /// Processes n mono samples; input and output may alias.
   void process(const float* input, float* output, std::size_t n);
-
   void reset();
 
  private:
   void updatePitchRatio();
+  void processLegacy(const float* input, float* output, std::size_t n);
+  void processModern(const float* input, float* output, std::size_t n);
 
-  PitchTracker tracker_;
+  Config config_;
   ExpressivityMapper mapper_;
-  PhaseVocoder vocoder_;
-
-  std::size_t samplesUntilUpdate_;
   float currentF0_ = 0.0f;
+
+  // Legacy components
+  std::unique_ptr<PitchTracker> legacyTracker_;
+  std::unique_ptr<PhaseVocoder> legacyVocoder_;
+  std::size_t samplesUntilUpdate_ = 0;
+
+  // Modern components
+#ifdef HAVE_ONNXRUNTIME
+  std::unique_ptr<SwiftPitchTracker> modernTracker_;
+  std::vector<float> resampled16k_;
+  std::size_t samplesUntilSwiftUpdate_ = 0;
+#endif
+
+#ifdef HAVE_RUBBERBAND
+  std::unique_ptr<RubberBandStretcher> modernStretcher_;
+#endif
 };
 
 }  // namespace vocalexp

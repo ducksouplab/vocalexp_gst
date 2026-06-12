@@ -1,12 +1,15 @@
 #include "dsp/vocal_expressivity_processor.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <fstream>
+#include <iostream>
 
 namespace vocalexp {
 
 namespace {
 
-PitchTracker::Config makeTrackerConfig(const VocalExpressivityProcessor::Config& c) {
+PitchTracker::Config makeLegacyTrackerConfig(const VocalExpressivityProcessor::Config& c) {
   PitchTracker::Config tc;
   tc.sampleRate = c.sampleRate;
   tc.windowSize = c.frameSize;
@@ -15,53 +18,209 @@ PitchTracker::Config makeTrackerConfig(const VocalExpressivityProcessor::Config&
   return tc;
 }
 
-PhaseVocoder::Config makeVocoderConfig(const VocalExpressivityProcessor::Config& c) {
+PhaseVocoder::Config makeLegacyVocoderConfig(const VocalExpressivityProcessor::Config& c) {
   PhaseVocoder::Config vc;
   vc.sampleRate = c.sampleRate;
   vc.frameSize = c.frameSize;
   vc.overlapFactor = c.overlapFactor;
   vc.envelopePreservation = c.envelopePreservation;
-  vc.envelopeOrder = c.envelopeOrder;
+  vc.envelopeOrder = static_cast<int>(c.envelopeOrder);
   return vc;
 }
 
 }  // namespace
 
 VocalExpressivityProcessor::VocalExpressivityProcessor(const Config& config)
-    : tracker_(makeTrackerConfig(config)),
-      vocoder_(makeVocoderConfig(config)),
-      samplesUntilUpdate_(vocoder_.hopSize()) {
+    : config_(config) {
   mapper_.setExpressivity(config.expressivity);
+
+  if (config_.engine == Engine::LEGACY) {
+    legacyTracker_ = std::make_unique<PitchTracker>(makeLegacyTrackerConfig(config_));
+    legacyVocoder_ = std::make_unique<PhaseVocoder>(makeLegacyVocoderConfig(config_));
+    samplesUntilUpdate_ = 0; // Trigger update on first sample
+  } else {
+#ifdef HAVE_ONNXRUNTIME
+    SwiftPitchTracker::Config sc;
+    modernTracker_ = std::make_unique<SwiftPitchTracker>(sc);
+    samplesUntilSwiftUpdate_ = 0; // Trigger update on first sample
+#endif
+#ifdef HAVE_RUBBERBAND
+    RubberBandStretcher::Config rc;
+    rc.sampleRate = config_.sampleRate;
+    rc.preserveFormants = config_.envelopePreservation;
+    modernStretcher_ = std::make_unique<RubberBandStretcher>(rc);
+#endif
+  }
+}
+
+VocalExpressivityProcessor::~VocalExpressivityProcessor() = default;
+
+void VocalExpressivityProcessor::setExpressivity(float e) {
+  mapper_.setExpressivity(e);
+}
+
+void VocalExpressivityProcessor::setEnvelopePreservation(bool enabled) {
+  config_.envelopePreservation = enabled;
+  if (legacyVocoder_) {
+    legacyVocoder_->setEnvelopePreservation(enabled);
+  }
+#ifdef HAVE_RUBBERBAND
+  if (modernStretcher_) {
+    // Note: RubberBand options are fixed at construction in current wrapper.
+  }
+#endif
+}
+
+bool VocalExpressivityProcessor::envelopePreservation() const {
+  return config_.envelopePreservation;
+}
+
+std::size_t VocalExpressivityProcessor::latencySamples() const {
+  if (config_.engine == Engine::LEGACY) {
+    return legacyVocoder_ ? legacyVocoder_->latencySamples() : 0;
+  }
+#ifdef HAVE_RUBBERBAND
+  return modernStretcher_ ? modernStretcher_->latency() : 0;
+#else
+  return 0;
+#endif
+}
+
+std::size_t VocalExpressivityProcessor::hopSize() const {
+  if (config_.engine == Engine::LEGACY) {
+    return legacyVocoder_ ? legacyVocoder_->hopSize() : 0;
+  }
+  return static_cast<std::size_t>(config_.sampleRate * 0.016f); // 16ms
+}
+
+float VocalExpressivityProcessor::currentPitchRatio() const {
+  if (config_.engine == Engine::LEGACY) {
+    return legacyVocoder_ ? legacyVocoder_->pitchRatio() : 1.0f;
+  }
+  return 1.0f; 
 }
 
 void VocalExpressivityProcessor::reset() {
-  tracker_.reset();
   mapper_.reset();
-  vocoder_.reset();
-  samplesUntilUpdate_ = vocoder_.hopSize();
   currentF0_ = 0.0f;
+  if (legacyTracker_) legacyTracker_->reset();
+  if (legacyVocoder_) legacyVocoder_->reset();
+  samplesUntilUpdate_ = 0;
+
+#ifdef HAVE_ONNXRUNTIME
+  if (modernTracker_) modernTracker_->reset();
+  samplesUntilSwiftUpdate_ = 0;
+#endif
+#ifdef HAVE_RUBBERBAND
+  if (modernStretcher_) modernStretcher_->reset();
+#endif
 }
 
 void VocalExpressivityProcessor::updatePitchRatio() {
-  const PitchEstimate estimate = tracker_.estimate();
-  currentF0_ = estimate.f0;
-  vocoder_.setPitchRatio(mapper_.process(estimate.f0));
+  float f0 = 0.0f;
+  float ratio = 1.0f;
+
+  if (config_.engine == Engine::LEGACY) {
+    const PitchEstimate estimate = legacyTracker_->estimate();
+    f0 = estimate.f0;
+    ratio = mapper_.process(f0);
+    legacyVocoder_->setPitchRatio(ratio);
+  } else {
+#ifdef HAVE_ONNXRUNTIME
+    const PitchEstimate estimate = modernTracker_->estimate();
+    f0 = estimate.f0;
+    ratio = mapper_.process(f0);
+#ifdef HAVE_RUBBERBAND
+    if (modernStretcher_) {
+      modernStretcher_->setPitchRatio(ratio);
+    }
+#endif
+#endif
+  }
+  
+  currentF0_ = f0;
+
+  static std::unique_ptr<std::ofstream> logFile;
+  const char* logPath = std::getenv("VOCALEXP_F0_LOG");
+  if (logPath) {
+    if (!logFile) {
+      logFile = std::make_unique<std::ofstream>(logPath);
+      *logFile << "engine,f0,ratio" << std::endl;
+    }
+    *logFile << (config_.engine == Engine::LEGACY ? "legacy" : "modern") << "," << f0 << "," << ratio << std::endl;
+  }
 }
 
 void VocalExpressivityProcessor::process(const float* input, float* output, std::size_t n) {
-  // The pitch ratio is re-evaluated once per hop, synchronised with the
-  // vocoder's analysis frames; the vocoder itself streams sample by sample.
+  if (config_.engine == Engine::LEGACY) {
+    processLegacy(input, output, n);
+  } else {
+    processModern(input, output, n);
+  }
+}
+
+void VocalExpressivityProcessor::processLegacy(const float* input, float* output, std::size_t n) {
   std::size_t processed = 0;
   while (processed < n) {
+    if (samplesUntilUpdate_ == 0) {
+      updatePitchRatio();
+      samplesUntilUpdate_ = legacyVocoder_->hopSize();
+    }
+
     const std::size_t chunk = std::min(n - processed, samplesUntilUpdate_);
-    tracker_.push(input + processed, chunk);
-    vocoder_.process(input + processed, output + processed, chunk);
+    legacyTracker_->push(input + processed, chunk);
+    legacyVocoder_->process(input + processed, output + processed, chunk);
 
     processed += chunk;
     samplesUntilUpdate_ -= chunk;
-    if (samplesUntilUpdate_ == 0) {
+  }
+}
+
+void VocalExpressivityProcessor::processModern(const float* input, float* output, std::size_t n) {
+  std::size_t processed = 0;
+  while (processed < n) {
+    const std::size_t chunk = std::min(n - processed, samplesUntilSwiftUpdate_);
+    
+    // 1. Resample chunk to 16kHz for SWIFT using an averaging filter
+    float sr_ratio = 16000.0f / config_.sampleRate;
+    std::size_t chunk16k = static_cast<std::size_t>(chunk * sr_ratio);
+    if (chunk16k > 0) {
+      resampled16k_.resize(chunk16k);
+      float inv_ratio = 1.0f / sr_ratio;
+      for (std::size_t i = 0; i < chunk16k; ++i) {
+        float start = i * inv_ratio;
+        float end = (i + 1) * inv_ratio;
+        float sum = 0.0f;
+        int count = 0;
+        for (int j = static_cast<int>(start); j < static_cast<int>(end) && (processed + j) < n; ++j) {
+          sum += input[processed + j];
+          count++;
+        }
+        resampled16k_[i] = (count > 0) ? sum / count : 0.0f;
+      }
+#ifdef HAVE_ONNXRUNTIME
+      if (modernTracker_) {
+        modernTracker_->push(resampled16k_.data(), chunk16k);
+      }
+#endif
+    }
+
+#ifdef HAVE_RUBBERBAND
+    // 2. Process through RubberBand
+    if (modernStretcher_) {
+      modernStretcher_->process(input + processed, output + processed, chunk);
+    } else {
+      std::copy(input + processed, input + processed + chunk, output + processed);
+    }
+#else
+    std::copy(input + processed, input + processed + chunk, output + processed);
+#endif
+
+    processed += chunk;
+    samplesUntilSwiftUpdate_ -= chunk;
+    if (samplesUntilSwiftUpdate_ == 0) {
       updatePitchRatio();
-      samplesUntilUpdate_ = vocoder_.hopSize();
+      samplesUntilSwiftUpdate_ = static_cast<std::size_t>(config_.sampleRate * 0.016f);
     }
   }
 }
