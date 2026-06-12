@@ -22,12 +22,17 @@ monotone (`expressivity < 1`) or exaggerating its intonation
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-ctest --test-dir build --output-on-failure   # 50 tests
+ctest --test-dir build --output-on-failure   # 51 tests
 
 # Run the element without installing:
 export GST_PLUGIN_PATH="$PWD/build"
 gst-inspect-1.0 vocalexp
 ```
+
+Prefer notebooks? [`notebooks/vocalexp_tutorial.ipynb`](notebooks/vocalexp_tutorial.ipynb)
+builds the plugin, processes a WAV of your choice (or a generated demo voice),
+lets you A/B the audio, and plots pitch contours and spectrograms for any
+parameter combination (needs `numpy` + `matplotlib`).
 
 Requires CMake ≥ 3.16, a C++17 compiler, GStreamer ≥ 1.20 development files
 (`gstreamer-1.0`, `gstreamer-base-1.0`, `gstreamer-audio-1.0`; on
