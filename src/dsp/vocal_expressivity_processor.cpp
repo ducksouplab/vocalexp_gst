@@ -179,6 +179,11 @@ void VocalExpressivityProcessor::processLegacy(const float* input, float* output
 void VocalExpressivityProcessor::processModern(const float* input, float* output, std::size_t n) {
   std::size_t processed = 0;
   while (processed < n) {
+    if (samplesUntilSwiftUpdate_ == 0) {
+      updatePitchRatio();
+      samplesUntilSwiftUpdate_ = static_cast<std::size_t>(config_.sampleRate * 0.016f);
+    }
+
     const std::size_t chunk = std::min(n - processed, samplesUntilSwiftUpdate_);
     
     // 1. Resample chunk to 16kHz for SWIFT using an averaging filter
@@ -218,10 +223,6 @@ void VocalExpressivityProcessor::processModern(const float* input, float* output
 
     processed += chunk;
     samplesUntilSwiftUpdate_ -= chunk;
-    if (samplesUntilSwiftUpdate_ == 0) {
-      updatePitchRatio();
-      samplesUntilSwiftUpdate_ = static_cast<std::size_t>(config_.sampleRate * 0.016f);
-    }
   }
 }
 
