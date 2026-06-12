@@ -130,18 +130,29 @@ void VocalExpressivityProcessor::updatePitchRatio() {
   if (config_.engine == Engine::LEGACY) {
     const PitchEstimate estimate = legacyTracker_->estimate();
     f0 = estimate.f0;
-    ratio = mapper_.process(f0);
-    legacyVocoder_->setPitchRatio(ratio);
   } else {
 #ifdef HAVE_ONNXRUNTIME
     const PitchEstimate estimate = modernTracker_->estimate();
     f0 = estimate.f0;
-    ratio = mapper_.process(f0);
+#endif
+  }
+  
+  // Apply pitch search range "ceilings" to the estimate
+  if (f0 > 0.0f) {
+    if (f0 < config_.minFrequency || f0 > config_.maxFrequency) {
+      f0 = 0.0f; // Treat out-of-range as unvoiced
+    }
+  }
+
+  ratio = mapper_.process(f0);
+
+  if (config_.engine == Engine::LEGACY) {
+    legacyVocoder_->setPitchRatio(ratio);
+  } else {
 #ifdef HAVE_RUBBERBAND
     if (modernStretcher_) {
       modernStretcher_->setPitchRatio(ratio);
     }
-#endif
 #endif
   }
   

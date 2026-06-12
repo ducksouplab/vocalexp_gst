@@ -52,6 +52,9 @@ class ExpressivityMapper {
   bool voiced_ = false;
   float previousF0_ = 0.0f;  // f0(t-1), original contour
   float modifiedF0_ = 0.0f;  // f0_mod(t-1), transformed contour
+  
+  int unvoicedCounter_ = 0;
+  static constexpr int kUnvoicedHoldFrames = 5; // ~80ms at 16ms hop
 };
 
 }  // namespace vocalexp
