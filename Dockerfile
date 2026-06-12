@@ -14,6 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgstreamer-plugins-base1.0-dev \
     libgtest-dev \
     librubberband-dev \
+    python3-matplotlib \
+    python3-numpy \
     wget \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*

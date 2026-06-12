@@ -42,6 +42,7 @@ enum {
   PROP_OVERLAP_FACTOR,
   PROP_MIN_FREQUENCY,
   PROP_MAX_FREQUENCY,
+  PROP_VERBOSE,
 };
 
 // Mono float: one pitch contour per stream is the model; pipelines mix down
@@ -71,6 +72,7 @@ struct _GstVocalexp {
   guint overlapFactor;
   gfloat minFrequency;
   gfloat maxFrequency;
+  gboolean verbose;
 };
 
 G_DEFINE_TYPE_WITH_CODE(GstVocalexp, gst_vocalexp, GST_TYPE_AUDIO_FILTER,
@@ -125,6 +127,10 @@ static void gst_vocalexp_set_property(GObject* object, guint propertyId,
     case PROP_MAX_FREQUENCY:
       self->maxFrequency = g_value_get_float(value);
       break;
+    case PROP_VERBOSE:
+      self->verbose = g_value_get_boolean(value);
+      if (*self->processor) (*self->processor)->setVerbose(self->verbose != FALSE);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID(object, propertyId, pspec);
       break;
@@ -158,6 +164,9 @@ static void gst_vocalexp_get_property(GObject* object, guint propertyId, GValue*
     case PROP_MAX_FREQUENCY:
       g_value_set_float(value, self->maxFrequency);
       break;
+    case PROP_VERBOSE:
+      g_value_set_boolean(value, self->verbose);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID(object, propertyId, pspec);
       break;
@@ -185,6 +194,7 @@ static gboolean gst_vocalexp_setup(GstAudioFilter* filter, const GstAudioInfo* i
   config.overlapFactor = self->overlapFactor;
   config.minFrequency = self->minFrequency;
   config.maxFrequency = self->maxFrequency;
+  config.verbose = self->verbose != FALSE;
 
   try {
     self->processor->reset(new vocalexp::VocalExpressivityProcessor(config));
@@ -354,10 +364,17 @@ static void gst_vocalexp_class_init(GstVocalexpClass* klass) {
           "max-frequency", "Maximum pitch",
           "Upper bound of the pitch search range in Hz. Takes effect on the "
           "next caps negotiation.",
-          50.0f, 4000.0f, kDefaultMaxFrequency,
+          20.0f, 4000.0f, kDefaultMaxFrequency,
           static_cast<GParamFlags>(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 
-  gst_element_class_set_static_metadata(
+          g_object_class_install_property(
+          gobjectClass, PROP_VERBOSE,
+          g_param_spec_boolean(
+          "verbose", "Verbose logging",
+          "Log internal DSP state (F0, ratio) to 'vocalexp_debug.csv'",
+          FALSE, static_cast<GParamFlags>(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
+          gst_element_class_set_static_metadata(
       elementClass, "Vocal expressivity transformer", "Filter/Effect/Audio",
       "Scales the expressivity of a voice's pitch contour in real time via "
       "YIN pitch tracking and a formant-preserving phase vocoder",
@@ -384,6 +401,7 @@ static void gst_vocalexp_init(GstVocalexp* self) {
   self->overlapFactor = kDefaultOverlapFactor;
   self->minFrequency = kDefaultMinFrequency;
   self->maxFrequency = kDefaultMaxFrequency;
+  self->verbose = FALSE;
 }
 
 gboolean gst_vocalexp_element_register(GstPlugin* plugin) {

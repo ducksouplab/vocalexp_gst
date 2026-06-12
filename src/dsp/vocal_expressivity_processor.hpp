@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <fstream>
 #include <memory>
 #include <vector>
 
@@ -45,6 +46,7 @@ class VocalExpressivityProcessor {
     float minFrequency = 60.0f;
     float maxFrequency = 1000.0f;
     std::size_t envelopeOrder = 40;
+    bool verbose = false;
   };
 
   explicit VocalExpressivityProcessor(const Config& config);
@@ -55,6 +57,9 @@ class VocalExpressivityProcessor {
 
   void setEnvelopePreservation(bool enabled);
   bool envelopePreservation() const;
+
+  void setVerbose(bool enabled) { config_.verbose = enabled; }
+  bool verbose() const { return config_.verbose; }
 
   std::size_t latencySamples() const;
   std::size_t hopSize() const;
@@ -73,6 +78,9 @@ class VocalExpressivityProcessor {
   Config config_;
   ExpressivityMapper mapper_;
   float currentF0_ = 0.0f;
+  float currentRatio_ = 1.0f;
+  std::unique_ptr<std::ofstream> debugLog_;
+  std::size_t sampleCounter_ = 0;
 
   // Legacy components
   std::unique_ptr<PitchTracker> legacyTracker_;

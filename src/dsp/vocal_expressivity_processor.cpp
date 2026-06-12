@@ -103,6 +103,13 @@ float VocalExpressivityProcessor::currentPitchRatio() const {
 void VocalExpressivityProcessor::reset() {
   mapper_.reset();
   currentF0_ = 0.0f;
+  currentRatio_ = 1.0f;
+  sampleCounter_ = 0;
+  if (debugLog_) {
+    debugLog_ = std::make_unique<std::ofstream>("vocalexp_debug.csv");
+    *debugLog_ << "sample_index,input,f0,ratio" << std::endl;
+  }
+
   if (legacyTracker_) legacyTracker_->reset();
   if (legacyVocoder_) legacyVocoder_->reset();
   samplesUntilUpdate_ = 0;
@@ -139,15 +146,13 @@ void VocalExpressivityProcessor::updatePitchRatio() {
   }
   
   currentF0_ = f0;
+  currentRatio_ = ratio;
 
-  static std::unique_ptr<std::ofstream> logFile;
-  const char* logPath = std::getenv("VOCALEXP_F0_LOG");
-  if (logPath) {
-    if (!logFile) {
-      logFile = std::make_unique<std::ofstream>(logPath);
-      *logFile << "engine,f0,ratio" << std::endl;
+  if (config_.verbose) {
+    if (!debugLog_) {
+      debugLog_ = std::make_unique<std::ofstream>("vocalexp_debug.csv");
+      *debugLog_ << "sample_index,input,f0,ratio" << std::endl;
     }
-    *logFile << (config_.engine == Engine::LEGACY ? "legacy" : "modern") << "," << f0 << "," << ratio << std::endl;
   }
 }
 
@@ -156,6 +161,12 @@ void VocalExpressivityProcessor::process(const float* input, float* output, std:
     processLegacy(input, output, n);
   } else {
     processModern(input, output, n);
+  }
+
+  if (config_.verbose && debugLog_) {
+    for (std::size_t i = 0; i < n; ++i) {
+      *debugLog_ << sampleCounter_++ << "," << input[i] << "," << currentF0_ << "," << currentRatio_ << "\n";
+    }
   }
 }
 
