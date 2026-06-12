@@ -1,0 +1,7 @@
+build/
+*.o
+*.so
+compile_commands.json
+.cache/
+notebooks/*.wav
+notebooks/.ipynb_checkpoints/
