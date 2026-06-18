@@ -64,7 +64,12 @@ TEST(ExpressivityMapper, UnvoicedFramesPassThroughAndResetTheContour) {
   EXPECT_FLOAT_EQ(mapper.process(200.0f), 1.0f);
   EXPECT_NEAR(mapper.process(220.0f), 240.0f / 220.0f, 1e-6f);
 
-  // Unvoiced gap.
+  // Short unvoiced gap (holds the last known ratio for up to 5 frames).
+  for (int i = 0; i < 5; ++i) {
+    EXPECT_NEAR(mapper.process(0.0f), 240.0f / 220.0f, 1e-6f);
+  }
+
+  // Long unvoiced gap (resets).
   EXPECT_FLOAT_EQ(mapper.process(0.0f), 1.0f);
   EXPECT_FLOAT_EQ(mapper.process(0.0f), 1.0f);
 

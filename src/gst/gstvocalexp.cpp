@@ -28,8 +28,8 @@ constexpr float kDefaultExpressivity = 1.0f;
 constexpr gboolean kDefaultEnvelopePreservation = TRUE;
 constexpr guint kDefaultFrameSize = 1024;
 constexpr guint kDefaultOverlapFactor = 4;
-constexpr float kDefaultMinFrequency = 100.0f;
-constexpr float kDefaultMaxFrequency = 450.0f;
+constexpr float kDefaultMinFrequency = 70.0f;
+constexpr float kDefaultMaxFrequency = 400.0f;
 constexpr vocalexp::VocalExpressivityProcessor::Engine kDefaultEngine =
     vocalexp::VocalExpressivityProcessor::Engine::LEGACY;
 
